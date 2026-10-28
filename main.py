@@ -3,15 +3,16 @@ import sqlite3
 from PySide6.QtWidgets import (QApplication, QMainWindow, QLabel, QVBoxLayout, 
                                QWidget, QPushButton, QLineEdit, QSpinBox, 
                                QDoubleSpinBox, QFormLayout, QMessageBox, 
-                               QTableWidget, QTableWidgetItem, QHeaderView)
+                               QTableWidget, QTableWidgetItem, QHeaderView, QHBoxLayout)
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QColor
 from database import init_local_db
 
 class FarmAppAdmin(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("FarmApp - Sistema Administrativo (Fase 2)")
-        self.resize(800, 700) # Ventana un poco más grande para la tabla
+        self.setWindowTitle("FarmApp - Sistema Administrativo (Fase 2 - Semáforos y Buscador)")
+        self.resize(850, 750)
 
         init_local_db()
 
@@ -41,32 +42,52 @@ class FarmAppAdmin(QMainWindow):
         self.btn_save.setStyleSheet("padding: 8px; background-color: #2ecc71; color: white; font-weight: bold;")
         self.btn_save.clicked.connect(self.save_product)
 
-        # --- TABLA DE INVENTARIO (FASE 2) ---
-        self.table_label = QLabel("Inventario Local (Caché SQLite):")
-        self.table_label.setStyleSheet("font-size: 16px; font-weight: bold; margin-top: 15px;")
+        # --- BUSCADOR Y ETIQUETA ---
+        header_layout = QHBoxLayout()
+        self.table_label = QLabel("Inventario Local:")
+        self.table_label.setStyleSheet("font-size: 16px; font-weight: bold;")
         
+        self.input_search = QLineEdit()
+        self.input_search.setPlaceholderText("🔍 Buscar producto al instante...")
+        self.input_search.setStyleSheet("padding: 5px; font-size: 14px; border: 1px solid #bdc3c7; border-radius: 4px;")
+        
+        # Esta es la magia: Conectar cada vez que se teclea una letra a la función de filtrar
+        self.input_search.textChanged.connect(self.filter_table)
+
+        header_layout.addWidget(self.table_label)
+        header_layout.addStretch()
+        header_layout.addWidget(self.input_search)
+
+        # --- TABLA DE INVENTARIO ---
         self.inventory_table = QTableWidget()
         self.inventory_table.setColumnCount(4)
         self.inventory_table.setHorizontalHeaderLabels(["ID", "Producto", "Stock", "Precio"])
-        # Hacer que las columnas se estiren para ocupar todo el ancho
         self.inventory_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         
         # --- ENSAMBLAJE ---
         main_layout.addWidget(self.title)
         main_layout.addLayout(form_layout)
         main_layout.addWidget(self.btn_save)
-        main_layout.addWidget(self.table_label)
+        main_layout.addSpacing(15)
+        main_layout.addLayout(header_layout) # Agregamos el header con el buscador
         main_layout.addWidget(self.inventory_table)
 
         container = QWidget()
         container.setLayout(main_layout)
         self.setCentralWidget(container)
 
-        # Cargar los datos apenas se abre la app
         self.load_inventory()
 
+    def filter_table(self, text):
+        """Oculta las filas que no coincidan con la búsqueda en tiempo real."""
+        for row in range(self.inventory_table.rowCount()):
+            item = self.inventory_table.item(row, 1) # La columna 1 es "Producto"
+            if item:
+                # Si el texto de búsqueda está en el nombre (ignorando mayúsculas)
+                match = text.lower() in item.text().lower()
+                self.inventory_table.setRowHidden(row, not match)
+
     def load_inventory(self):
-        """Lee la base de datos SQLite y llena la tabla."""
         try:
             conn = sqlite3.connect('farmapp_cache.db')
             cursor = conn.cursor()
@@ -74,19 +95,32 @@ class FarmAppAdmin(QMainWindow):
             rows = cursor.fetchall()
             conn.close()
 
-            # Configurar cantidad de filas en la tabla
             self.inventory_table.setRowCount(len(rows))
 
-            # Rellenar celdas
             for row_idx, row_data in enumerate(rows):
-                # ID
-                self.inventory_table.setItem(row_idx, 0, QTableWidgetItem(str(row_data[0])))
-                # Nombre
-                self.inventory_table.setItem(row_idx, 1, QTableWidgetItem(str(row_data[1])))
-                # Stock
-                self.inventory_table.setItem(row_idx, 2, QTableWidgetItem(str(row_data[2])))
-                # Precio (formateado)
-                self.inventory_table.setItem(row_idx, 3, QTableWidgetItem(f"$ {row_data[3]:.2f}"))
+                stock_value = int(row_data[2])
+                
+                item_id = QTableWidgetItem(str(row_data[0]))
+                item_name = QTableWidgetItem(str(row_data[1]))
+                item_stock = QTableWidgetItem(str(stock_value))
+                item_price = QTableWidgetItem(f"$ {row_data[3]:.2f}")
+
+                if stock_value <= 5:
+                    item_stock.setBackground(QColor("#e74c3c"))
+                    item_stock.setForeground(QColor("white"))
+                elif stock_value <= 15:
+                    item_stock.setBackground(QColor("#f1c40f"))
+                    item_stock.setForeground(QColor("black"))
+                else:
+                    item_stock.setBackground(QColor("#2ecc71"))
+                    item_stock.setForeground(QColor("white"))
+                
+                item_stock.setTextAlignment(Qt.AlignCenter)
+
+                self.inventory_table.setItem(row_idx, 0, item_id)
+                self.inventory_table.setItem(row_idx, 1, item_name)
+                self.inventory_table.setItem(row_idx, 2, item_stock)
+                self.inventory_table.setItem(row_idx, 3, item_price)
                 
         except Exception as e:
             print("Error cargando inventario:", e)
@@ -106,14 +140,13 @@ class FarmAppAdmin(QMainWindow):
             cursor.execute('INSERT INTO inventory (product_name, stock, price) VALUES (?, ?, ?)', (name, stock, price))
             conn.commit()
             conn.close()
-            git add .
-            # Limpiar formulario
+            
             self.input_name.clear()
             self.input_stock.setValue(0)
             self.input_price.setValue(0.0)
             
-            # ¡Recargar la tabla automáticamente para ver el nuevo producto!
             self.load_inventory()
+            self.input_search.clear() # Limpiar buscador tras guardar
             
         except Exception as e:
             QMessageBox.critical(self, "Error de BD", str(e))
