@@ -1,9 +1,11 @@
 import sys
 import sqlite3
+import csv
 from PySide6.QtWidgets import (QApplication, QMainWindow, QLabel, QVBoxLayout, 
                                QWidget, QPushButton, QLineEdit, QSpinBox, 
                                QDoubleSpinBox, QFormLayout, QMessageBox, 
-                               QTableWidget, QTableWidgetItem, QHeaderView, QHBoxLayout)
+                               QTableWidget, QTableWidgetItem, QHeaderView, QHBoxLayout,
+                               QFileDialog)
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
 from database import init_local_db
@@ -11,7 +13,7 @@ from database import init_local_db
 class FarmAppAdmin(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("FarmApp - Sistema Administrativo (Fase 2 - Semáforos y Buscador)")
+        self.setWindowTitle("FarmApp - Sistema Administrativo (Fase 2 Completa)")
         self.resize(850, 750)
 
         init_local_db()
@@ -23,7 +25,6 @@ class FarmAppAdmin(QMainWindow):
         self.title.setAlignment(Qt.AlignCenter)
         self.title.setStyleSheet("font-size: 24px; font-weight: bold; color: #2c3e50; margin-bottom: 10px;")
         
-        # --- CAMPOS DEL FORMULARIO ---
         self.input_name = QLineEdit()
         self.input_name.setPlaceholderText("Ej. Paracetamol 500mg")
         
@@ -38,11 +39,20 @@ class FarmAppAdmin(QMainWindow):
         form_layout.addRow("Stock (Unidades):", self.input_stock)
         form_layout.addRow("Precio de Venta:", self.input_price)
 
-        self.btn_save = QPushButton("Guardar Producto")
+        # --- ZONA DE BOTONES ---
+        buttons_layout = QHBoxLayout()
+        
+        self.btn_save = QPushButton("Guardar Manualmente")
         self.btn_save.setStyleSheet("padding: 8px; background-color: #2ecc71; color: white; font-weight: bold;")
         self.btn_save.clicked.connect(self.save_product)
 
-        # --- BUSCADOR Y ETIQUETA ---
+        self.btn_import = QPushButton("📂 Importar CSV Masivo")
+        self.btn_import.setStyleSheet("padding: 8px; background-color: #f39c12; color: white; font-weight: bold;")
+        self.btn_import.clicked.connect(self.import_csv)
+
+        buttons_layout.addWidget(self.btn_save)
+        buttons_layout.addWidget(self.btn_import)
+
         header_layout = QHBoxLayout()
         self.table_label = QLabel("Inventario Local:")
         self.table_label.setStyleSheet("font-size: 16px; font-weight: bold;")
@@ -50,26 +60,22 @@ class FarmAppAdmin(QMainWindow):
         self.input_search = QLineEdit()
         self.input_search.setPlaceholderText("🔍 Buscar producto al instante...")
         self.input_search.setStyleSheet("padding: 5px; font-size: 14px; border: 1px solid #bdc3c7; border-radius: 4px;")
-        
-        # Esta es la magia: Conectar cada vez que se teclea una letra a la función de filtrar
         self.input_search.textChanged.connect(self.filter_table)
 
         header_layout.addWidget(self.table_label)
         header_layout.addStretch()
         header_layout.addWidget(self.input_search)
 
-        # --- TABLA DE INVENTARIO ---
         self.inventory_table = QTableWidget()
         self.inventory_table.setColumnCount(4)
         self.inventory_table.setHorizontalHeaderLabels(["ID", "Producto", "Stock", "Precio"])
         self.inventory_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         
-        # --- ENSAMBLAJE ---
         main_layout.addWidget(self.title)
         main_layout.addLayout(form_layout)
-        main_layout.addWidget(self.btn_save)
+        main_layout.addLayout(buttons_layout)
         main_layout.addSpacing(15)
-        main_layout.addLayout(header_layout) # Agregamos el header con el buscador
+        main_layout.addLayout(header_layout)
         main_layout.addWidget(self.inventory_table)
 
         container = QWidget()
@@ -78,12 +84,44 @@ class FarmAppAdmin(QMainWindow):
 
         self.load_inventory()
 
+    def import_csv(self):
+        """Abre un explorador de archivos y carga cientos de productos desde un CSV."""
+        file_path, _ = QFileDialog.getOpenFileName(self, "Seleccionar archivo CSV de inventario", "", "Archivos CSV (*.csv)")
+        if not file_path:
+            return # El usuario canceló la ventana
+            
+        try:
+            conn = sqlite3.connect('farmapp_cache.db')
+            cursor = conn.cursor()
+            
+            with open(file_path, newline='', encoding='utf-8') as f:
+                reader = csv.reader(f)
+                next(reader, None) # Saltar la primera fila (los títulos)
+                
+                count = 0
+                for row in reader:
+                    # El CSV debe tener 3 columnas: Nombre, Stock, Precio
+                    if len(row) >= 3:
+                        name = row[0].strip()
+                        stock = int(row[1])
+                        price = float(row[2])
+                        cursor.execute('INSERT INTO inventory (product_name, stock, price) VALUES (?, ?, ?)', (name, stock, price))
+                        count += 1
+                        
+            conn.commit()
+            conn.close()
+            
+            self.load_inventory() # Recargar la tabla con todo lo nuevo
+            self.input_search.clear()
+            QMessageBox.information(self, "Éxito", f"Se importaron {count} productos correctamente al caché local.")
+            
+        except Exception as e:
+            QMessageBox.critical(self, "Error de Importación", f"Verifica que el CSV tenga formato (Nombre,Stock,Precio).\nError: {str(e)}")
+
     def filter_table(self, text):
-        """Oculta las filas que no coincidan con la búsqueda en tiempo real."""
         for row in range(self.inventory_table.rowCount()):
-            item = self.inventory_table.item(row, 1) # La columna 1 es "Producto"
+            item = self.inventory_table.item(row, 1)
             if item:
-                # Si el texto de búsqueda está en el nombre (ignorando mayúsculas)
                 match = text.lower() in item.text().lower()
                 self.inventory_table.setRowHidden(row, not match)
 
@@ -146,7 +184,7 @@ class FarmAppAdmin(QMainWindow):
             self.input_price.setValue(0.0)
             
             self.load_inventory()
-            self.input_search.clear() # Limpiar buscador tras guardar
+            self.input_search.clear()
             
         except Exception as e:
             QMessageBox.critical(self, "Error de BD", str(e))
